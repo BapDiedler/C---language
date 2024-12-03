@@ -1,0 +1,3 @@
+int pointeur() {
+    return NULL;
+}

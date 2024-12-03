@@ -1,0 +1,1 @@
+on a le droit de faire int x; int x;
