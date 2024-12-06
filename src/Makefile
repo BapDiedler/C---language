@@ -12,6 +12,10 @@ $(EXE): *.ml*
 	$(EXE) --debug --parse-only $^
 	dot -v -Tpng -O $(basename $@)_ast.dot
 
+cfg: %.c
+	$(EXE) --convert-cfg cfgTest.dot $^
+	dot -v -Tpng -O cfg_test.dot
+
 test: $(EXE)
 	-make clean >/dev/null
 	-make all >/dev/null

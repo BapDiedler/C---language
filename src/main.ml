@@ -40,7 +40,7 @@ let () =
     eprintf "Synthesis: not yet implemented!\n@.";
 
     (*WHAT YOU DID ON PREVIOUS PART*)
-    let program = assert false in
+    let program = f in
     match !Usage.cfg_file with
     | None -> ()
     | Some filename ->

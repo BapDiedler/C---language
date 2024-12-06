@@ -1,12 +1,8 @@
-int main() {
-  int(*a)();
-  if(0)
-  {
-    int(*main)();
-  }else
-  {
-    int a;
-  }
-  main = a;
-  return;
+int main()
+{
+  int a;
+  int b;
+  int c;
+  c = a+b;
+  return c;
 }
