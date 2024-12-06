@@ -13,7 +13,23 @@ type data = {
   graph : graph;
 }
 
+(* fonction de création d'un nouveau registre *)
+let new_reg =
+  let cpt = ref 0 in
+  fun () -> let c = !cpt in
+            cpt := c+1;
+            reg_of_string (string_of_int c)
 
+(* fonction nous donnant la localisation en mémoire de s dans data *)
+let check_location s data =
+    match VarMap.find_opt s data.local_map with (*check si local*)
+   | None -> begin 
+               match VarMap.find_opt s data.arg_map with (*check si arg*)
+               | None -> Global s (*check si global*)
+               | Some i -> Param i
+             end
+   | Some i -> Local i
+  
 
 (* cette fonction passe de l'ast vers cfg pour les globales declarations *)
 let rec transform_global_decl { globals; functions } = function
@@ -72,25 +88,62 @@ and transform_code data c =
 (* transforme les expressions *)
 and transform_expr r data e =
   let (l,ex) = e in
-  match ex with
-  | VAR v -> begin
-               match VarMap.find_opt v data.local_map with (*check si local*)
-              | None -> begin match VarMap.find_opt v data.arg_map with (*check si arg*)
-                        | None -> Load (r,(Global v)) (*check si global*)
-                        | Some i -> Load (r,(Param i))
-                        end
-              | Some i -> Load (r,(Local i))
-            end
-  | CST v -> failwith "TODO"
-  | STRING s -> failwith "TODO"
-  | SET_VAR (s,loc) -> failwith "TODO"
-  | SET_VAL (s,loc) ->failwith "TODO"
-  | CALL (s,loc) ->failwith "TODO"
-  | OP1 (op,loc) -> failwith "TODO"
-  | OP2 (op, loc1, loc2) ->failwith "TODO"
-  | CMP (cmp, loc1, loc2) -> failwith "TODO"
-  | EIF (loc1, loc2, loc3) ->failwith "TODO"
-  | ESEQ ll ->failwith "TODO"
+  match ex with (* il faut ajouter au block et passer à l'instruction suivante *)
+  | VAR v -> let _ = Load (r, check_location v data) in data
+
+  | CST v -> let _ = Cst (r,v) in data
+
+  | STRING s -> let _ = Cst_string (r,s) in data
+
+  | SET_VAR (s,loc) ->  let data = transform_expr (new_reg ()) data loc in (* changer le graphe de data avec res *)
+                        let _ = Store (check_location s data, r) in
+                        data
+
+  | SET_VAL (s,loc) -> let data = transform_expr (new_reg ()) data loc in (* changer le graphe de data avec res *)
+                        let _ = StoreI (check_location s data, r) in
+                        data
+  | CALL (s,loc) -> let _ = List.map (transform_expr (new_reg ()) data) loc in
+                    let _ = match VarMap.find_opt s data.local_map with (*check si local*)
+                            | None -> begin match VarMap.find_opt s data.arg_map with (*check si arg*)
+                                      | None -> Call (s) (*check si global*)(*création de registre pour au dessus?*)
+                                      | Some i -> CallR (r)
+                                      end
+                            | Some i -> CallR (r)
+                    in data
+  | OP1 (op,loc) -> let new_r = new_reg () in
+                    let data = transform_expr (new_r) data loc in (* on peut utliser le même registre ?*)
+                    let _ =
+                      match op with (* il faut mettre le registre que l'on vient de créer *)
+                      | M_MINUS -> Monop (r,MINUS,new_r)
+                      | M_NOT -> Monop (r,NOT,new_r)
+                      | M_POST_INC | M_PRE_INC -> Monop (r,ADDI 1,new_r)
+                      | M_POST_DEC | M_PRE_DEC -> Monop (r,ADDI (-1),new_r)
+                      | M_DEREF -> Monop (r,DEREF,new_r)
+                      | M_ADDR -> Monop (r,MOV,new_r)
+                    in data
+  | OP2 (op, loc1, loc2) -> let new_r1 = new_reg () in let new_r2 = new_reg () in
+                            let data = transform_expr (new_r1) data loc1 in
+                            let data = transform_expr (new_r2) data loc2 in
+                            let _ = 
+                                    match op with
+                                    | S_MUL -> Binop (r, MUL, new_r1, new_r2)
+                                    | S_DIV -> Binop (r, DIV, new_r1, new_r2)
+                                    | S_MOD -> Binop (r, MOD, new_r1, new_r2)
+                                    | S_ADD -> Binop (r, ADD, new_r1, new_r2)
+                                    | S_SUB -> Binop (r, SUB, new_r1, new_r2)
+                            in data
+  | CMP (cmp, loc1, loc2) ->  let new_r1 = new_reg () in
+                              let new_r2 = new_reg () in
+                              let data = transform_expr (new_r1) data loc1 in
+                              let data = transform_expr (new_r2) data loc2 in
+                              let _ =
+                                      match cmp with
+                                      | C_LT -> Binop (r, CMP_LT, new_r1, new_r2)
+                                      | C_LE -> Binop (r, CMP_LE, new_r1, new_r2)
+                                      | C_EQ -> Binop (r, CMP_EQ, new_r1, new_r2)
+                              in data
+  | EIF (loc1, loc2, loc3) -> failwith "TODO"
+  | ESEQ ll -> failwith "TODO"
 
 (* transforme le programme *)
 let transform_program =
