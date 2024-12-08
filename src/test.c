@@ -2,10 +2,15 @@ int c()
 {
   if(0)
   {
-    return 1;
+    if(1)
+    {
+      return 10;
+    }else{
+      return;
+    }
   }else
   {
-    2;
+    return 11;
   }
-  return;
+  return 12;
 }

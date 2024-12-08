@@ -88,34 +88,36 @@ and transform_code data c =
 
   | CEXPR loc -> transform_expr (new_reg ()) data loc
                   
-  | CRETURN None -> begin
-                      match data.next with
-                      | Label l-> let r = new_reg () in 
-                                  {data with graph = replace_block l (fun (nf,_) -> (nf@[Cst (r,0)],Return r)) data.graph}
-                      | Block b-> let _, g = add_block b data.graph in 
-                                  {data with graph = g}
-                    end
+  | CRETURN None -> let r = new_reg () in
+                  let l,g = 
+                  begin
+                    match data.next with
+                    | Label l -> l, replace_block l (fun (nf,_) -> (nf@[Cst (r,0)],Return r)) data.graph
+                    | Block (nf,_) -> add_block (nf@[Cst (r,0)],Return r) data.graph
+                  end
+                in
+                {data with next = Label l; graph = g}
             
   | CRETURN Some loc -> 
                   let new_r = new_reg () in
-                  let data = transform_expr new_r data loc in
+                  let l,g = 
                   begin
                     match data.next with
-                    | Label l-> {data with graph = replace_block l (fun (nf,_) -> (nf,Return new_r)) data.graph}
-                    | Block b-> let _, g = add_block b data.graph in {data with graph = g}
+                    | Label l -> l, replace_block l (fun (nf,_) -> (nf,Return new_r)) data.graph
+                    | Block (nf,_) -> add_block (nf,Return new_r) data.graph
                   end
+                in
+                let data = {data with next = Label l; graph = g} in
+                transform_expr new_r data loc
                   
   | CIF (loc1,(_,loc2),(_,loc3)) -> 
                   let new_r1 = new_reg () in
-                  let next = data.next in
-                  let l,_ = (match next with
+                  let l,_ = (match data.next with
                             | Label l -> l,data.graph
                             | Block b -> add_block b data.graph
                               ) 
                   in 
                   let data = {data with next = Block ([],(Jmp(l)))} in
-                  let data_bis = data in
-                  let data_b = data in
                   let data1 = transform_code data loc2 in
                   let l1, g1 = begin
                                 match data1.next with
@@ -123,14 +125,14 @@ and transform_code data c =
                                 | Block b-> add_block b data.graph
                               end
                 in
-                let data2 = transform_code {data_b with graph = g1} loc3 in
+                let data2 = transform_code {data with graph = g1} loc3 in
                   let l2, g2 = begin
                                 match data2.next with
                                 | Label l-> l, data2.graph
                                 | Block b-> add_block b data1.graph
                               end
                   in
-                  transform_expr new_r1 {data_bis with next = Block ([],JmpC(new_r1, l1, l2)); graph = g2} loc1
+                  transform_expr new_r1 {data with next = Block ([],JmpC(new_r1, l1, l2)); graph = g2} loc1
 
   | CWHILE (loc_expr,(_,code1)) ->
                 let new_r = new_reg () in
