@@ -136,23 +136,20 @@ and transform_code data c =
 
   | CWHILE (loc_expr,(_,code1)) ->
                 let new_r = new_reg () in
-                let l,_ = (match data.next with
+                let data_bis = data in
+                let l,_ = match data.next with
                           | Label l -> l,data.graph
                           | Block b -> add_block b data.graph
-                            ) 
                 in 
-                let data = {data with next = Block ([],(Jmp(l)))} in
+                let data = {data with next = Block ([],(Jmp(l)))} in 
+                let label,g = loop (fun l ->  let data = {data with next = Block ([],(Jmp(l)))} in
+                                              let data = transform_code data code1 in 
+                                              (match data.next with
+                                                        | Label l -> l, data.graph
+                                                        | Block b -> add_block b data.graph)) in
+                                              
 
-                let data1 = transform_code data code1 in
-                let label, g = (
-                  match data1.next with
-                  | Label l -> l,data1.graph
-                  | Block b -> add_block b data1.graph
-                ) in
-
-                
-
-                transform_expr new_r {data1 with next = Block ([],JmpC (new_r,label,l)); graph = g} loc_expr
+                transform_expr new_r {data_bis with next = Block ([],JmpC (new_r,label,l)); graph = g} loc_expr
 
 (* transforme les expressions *)
 and transform_expr r data e =
@@ -162,7 +159,7 @@ and transform_expr r data e =
       | Label l-> {data with graph = replace_block l (fun (nf,f) -> (new_nf::nf,f)) data.graph}
       | Block (nf,f)-> {data with next = Block (new_nf::nf,f)}
   in
-  
+
   let (l,ex) = e in
   match ex with
   | VAR v ->  change_data (Load (r, check_location v data))

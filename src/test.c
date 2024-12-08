@@ -1,7 +1,8 @@
 int c()
 {
-  int a;
-  a = 10;
-  0;
+  while(0)
+  {
+    return;
+  }
   return 2;
 }
