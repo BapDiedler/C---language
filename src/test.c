@@ -1,8 +1,11 @@
-int main()
+int c()
 {
-  int a;
-  int b;
-  int c;
-  c = a+b;
-  return c;
+  if(0)
+  {
+    return 1;
+  }else
+  {
+    2;
+  }
+  return;
 }

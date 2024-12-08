@@ -15,10 +15,12 @@ type data = {
 
 (* fonction de création d'un nouveau registre *)
 let new_reg =
-  let cpt = ref 0 in
-  fun () -> let c = !cpt in
-            incr cpt;
-            reg_of_string ("R_"^(string_of_int c))
+  let cpt = ref (-1) in
+  fun () ->
+    incr cpt;
+    let c = !cpt in
+    reg_of_string ("R_"^(string_of_int c))
+    
 
 (* fonction nous donnant la localisation en mémoire de s dans data *)
 let check_location s data =
@@ -61,50 +63,89 @@ and transform_fun_decl globals name args code =
       { name; graph; entry }
 
 (* la fonction transforme les déclarations locales *)
-and convert_local_decl (data,i) = function
+and convert_local_decl data = function
   | CDECL (_, name, _) ->
       (*à modifier pour que les variables locales soient associées à leur position dans la bible*)
-      ({ data with local_map = VarMap.add name i data.local_map },i+1)
+      { data with local_map = VarMap.add name 0 data.local_map }
   | _ -> assert false
 
 (* transformation du code *)
 and transform_code data c =
   match c with
   | CBLOCK (var_decls, loc_code) ->
-          let outer_locals = data.local_map in
-          let code = List.map snd loc_code in
-          let local_map = data.local_map in
-          let data,_ =
-            List.fold_left convert_local_decl ({ data with local_map },0) var_decls
-          in
-          let data =
-            List.fold_right (fun c data -> transform_code data c) code data
-          in
-          (*il faut que les variables locales définies dans le block ne soient plus retenues,
-            il faudra également dépiler celles ci*)
-          { data with local_map = outer_locals }
+                    let outer_locals = data.local_map in
+                    let code = List.map snd loc_code in
+                    let local_map = data.local_map in
+                    let data =
+                      List.fold_left convert_local_decl { data with local_map } var_decls
+                    in
+                    let data =
+                      List.fold_right (fun c data -> transform_code data c) code data
+                    in
+                    (*il faut que les variables locales définies dans le block ne soient plus retenues,
+                      il faudra également dépiler celles ci*)
+                    { data with local_map = outer_locals }
 
-  | CEXPR loc ->
-          let outer_locals = data.local_map in
-          let data = transform_expr (new_reg ()) data loc in
-          { data with local_map = outer_locals }
-
-  | CRETURN None -> begin (* appel récursif sur next ? *)
+  | CEXPR loc -> transform_expr (new_reg ()) data loc
+                  
+  | CRETURN None -> begin
                       match data.next with
-                      | Label l-> {data with graph = replace_block l (fun (nf,_) -> (nf,Return (new_reg ()))) data.graph}
-                      | Block (nf,_)-> {data with next = Block (nf,Return (new_reg ()))}
+                      | Label l-> let r = new_reg () in 
+                                  {data with graph = replace_block l (fun (nf,_) -> (nf@[Cst (r,0)],Return r)) data.graph}
+                      | Block b-> let _, g = add_block b data.graph in 
+                                  {data with graph = g}
                     end
             
   | CRETURN Some loc -> 
                   let new_r = new_reg () in
                   let data = transform_expr new_r data loc in
-                  begin (* appel récursif sur next ? *)
+                  begin
                     match data.next with
                     | Label l-> {data with graph = replace_block l (fun (nf,_) -> (nf,Return new_r)) data.graph}
-                    | Block (nf,_)-> {data with next = Block (nf,Return new_r)}
+                    | Block b-> let _, g = add_block b data.graph in {data with graph = g}
                   end
+                  
+  | CIF (loc1,(_,loc2),(_,loc3)) -> 
+                  let new_r1 = new_reg () in
+                  let next = data.next in
+                  let l,_ = (match next with
+                            | Label l -> l,data.graph
+                            | Block b -> add_block b data.graph
+                              ) 
+                  in 
+                  let data = {data with next = Block ([],(Jmp(l)))} in
+                  let data_bis = data in
+                  let data_b = data in
+                  let data1 = transform_code data loc2 in
+                  let l1, g1 = begin
+                                match data1.next with
+                                | Label l-> l, data1.graph
+                                | Block b-> add_block b data.graph
+                              end
+                in
+                let data2 = transform_code {data_b with graph = g1} loc3 in
+                  let l2, g2 = begin
+                                match data2.next with
+                                | Label l-> l, data2.graph
+                                | Block b-> add_block b data1.graph
+                              end
+                  in
+                  transform_expr new_r1 {data_bis with next = Block ([],JmpC(new_r1, l1, l2)); graph = g2} loc1
 
-  | _ -> failwith "TODO"
+  | CWHILE (loc_expr,(_,code1)) ->
+                let new_r = new_reg () in
+                let label_prev, graph = (
+                          match data.next with
+                          | Label l -> l,data.graph
+                          | Block b -> add_block b data.graph
+                  ) in
+                let data1 = transform_code data code1 in
+                let label, _ = (
+                  match data1.next with
+                  | Label l -> l,data1.graph
+                  | Block b -> add_block b data1.graph
+                ) in
+                transform_expr new_r {data1 with next = Block ([],JmpC (new_r,label,label_prev))} loc_expr
 
 (* transforme les expressions *)
 and transform_expr r data e =
@@ -116,10 +157,10 @@ and transform_expr r data e =
                 | Block (nf,f)-> {data with next = Block (Load (r, check_location v data)::nf,f)}
               end
 
-  | CST v ->  begin (* appel récursif sur next ? *)
+  | CST v ->  begin (* appel récursif sur next ? Je dois créer un registre pour mettre la constante ou non*)
                 match data.next with
-                | Label l-> {data with graph = replace_block l (fun (nf,f) -> (Cst (r,v)::nf,f)) data.graph}
-                | Block (nf,f)-> {data with next = Block (Cst (r,v)::nf,f)}
+                | Label l-> Printf.printf "Label %d\n" v;{data with graph = replace_block l (fun (nf,f) -> (Cst (r,v)::nf,f)) data.graph}
+                | Block (nf,f)-> Printf.printf "Block %d\n" v;let l,g = add_block (Cst (r,v)::nf,f) data.graph in {data with next = Label l; graph = g}
               end
 
   | STRING s -> begin (* appel récursif sur next ? *)
@@ -136,7 +177,7 @@ and transform_expr r data e =
                                       | Block (nf,f)-> {data with next = Block (new_nf ::nf,f)}
                                     end 
                         in
-                        transform_expr (new_reg ()) data loc (* changer le graphe de data avec res *)
+                        transform_expr (r) data loc (* changer le graphe de data avec res *)
 
   | SET_VAL (s,loc) ->   (* changer le graphe de data avec res *)
                         let new_nf = StoreI (check_location s data, r) in
@@ -171,7 +212,8 @@ and transform_expr r data e =
                       match op with (* il faut mettre le registre que l'on vient de créer *)
                       | M_MINUS -> Monop (r,MINUS,new_r)
                       | M_NOT -> Monop (r,NOT,new_r)
-                      | M_POST_INC | M_PRE_INC -> Monop (r,ADDI 1,new_r)
+                      | M_POST_INC -> Monop (r,ADDI 1,new_r)
+                      | M_PRE_INC -> Monop (r,ADDI 1,new_r)
                       | M_POST_DEC | M_PRE_DEC -> Monop (r,ADDI (-1),new_r)
                       | M_DEREF -> Monop (r,DEREF,new_r)
                       | M_ADDR -> Monop (r,MOV,new_r)
@@ -184,7 +226,7 @@ and transform_expr r data e =
                               end
                   in
                   transform_expr (new_r) data loc
-                  
+
   | OP2 (op, loc1, loc2) -> let new_r1 = new_reg () in let new_r2 = new_reg () in
                             let new_nf = 
                                     match op with
@@ -219,8 +261,28 @@ and transform_expr r data e =
                               in
                               let data = transform_expr (new_r1) data loc1 in
                               transform_expr (new_r2) data loc2
-  | EIF (loc1, loc2, loc3) -> failwith "TODO"
-  | ESEQ ll -> failwith "TODO"
+
+  | EIF (loc1, loc2, loc3) ->
+                            let new_r1 = new_reg () in
+                            let new_r2 = new_reg () in
+                            let data1 = transform_expr new_r1 data loc2 in
+                            let l1, g1 = begin
+                              match data1.next with
+                              | Label l-> l, data1.graph
+                              | Block b-> add_block b data1.graph
+                            end
+                            in
+                            let data2 = transform_expr new_r2 data loc3 in
+                            let l2, g2 = begin
+                                  match data2.next with
+                                  | Label l-> l, data2.graph
+                                  | Block b-> add_block b data2.graph
+                                end
+                            in
+                    
+                            transform_expr (r) {data with next = Block ([],JmpC(new_r1, l1, l2)); graph = g2} loc3
+
+  | ESEQ ll -> List.hd (List.rev_map (fun loc -> transform_expr (new_reg ()) data loc) ll) (* ne marche pas *)
 
 (* transforme le programme *)
 let transform_program =
