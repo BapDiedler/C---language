@@ -118,6 +118,7 @@ and transform_code data c =
                               ) 
                   in 
                   let data = {data with next = Block ([],(Jmp(l)))} in
+
                   let data1 = transform_code data loc2 in
                   let l1, g1 = begin
                                 match data1.next with
@@ -265,16 +266,22 @@ and transform_expr r data e =
                               transform_expr (new_r2) data loc2
 
   | EIF (loc1, loc2, loc3) ->
-                            let new_r1 = new_reg () in
-                            let new_r2 = new_reg () in
-                            let data1 = transform_expr new_r1 data loc2 in
+                            let l,_ = (match data.next with
+                                      | Label l -> l,data.graph
+                                      | Block b -> add_block b data.graph
+                                        ) 
+                            in 
+                            let data = {data with next = Block ([],(Jmp(l)))} in
+
+                            let data1 = transform_expr r data loc2 in
                             let l1, g1 = begin
                               match data1.next with
                               | Label l-> l, data1.graph
                               | Block b-> add_block b data1.graph
                             end
                             in
-                            let data2 = transform_expr new_r2 data loc3 in
+
+                            let data2 = transform_expr r {data with graph = g1} loc3 in
                             let l2, g2 = begin
                                   match data2.next with
                                   | Label l-> l, data2.graph
@@ -282,9 +289,9 @@ and transform_expr r data e =
                                 end
                             in
                     
-                            transform_expr (r) {data with next = Block ([],JmpC(new_r1, l1, l2)); graph = g2} loc3
+                            transform_expr (r) {data with next = Block ([],JmpC(r, l1, l2)); graph = g2} loc1
 
-  | ESEQ ll -> List.hd (List.rev_map (fun loc -> transform_expr (new_reg ()) data loc) ll) (* ne marche pas *)
+  | ESEQ ll -> List.fold_right (fun c data -> let new_r = new_reg () in transform_expr new_r data c) ll data
 
 (* transforme le programme *)
 let transform_program =
