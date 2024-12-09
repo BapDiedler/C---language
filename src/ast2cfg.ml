@@ -33,11 +33,11 @@ let check_location s data =
    | Some i -> Local i
 
 let creat_if data =
-  let l,_ = match data.next with
+  let l,g = match data.next with
             | Label l -> l,data.graph
             | Block b -> add_block b data.graph
   in 
-  {data with next = Block ([],(Jmp(l)))}
+  {data with next = Block ([],(Jmp(l))); graph = g}
   
 
 (* cette fonction passe de l'ast vers cfg pour les globales declarations *)
@@ -99,8 +99,8 @@ and transform_code data c =
                   let l,g = 
                   begin
                     match data.next with
-                    | Label l -> l, replace_block l (fun (nf,_) -> (nf@[Cst (r,0)],Return r)) data.graph
-                    | Block (nf,_) -> add_block (nf@[Cst (r,0)],Return r) data.graph
+                    | Label l -> add_block ([Cst (r,0)], Return r) data.graph
+                    | Block (_,_) -> add_block ([Cst (r,0)],Return r) data.graph
                   end
                 in
                 {data with next = Label l; graph = g}
@@ -110,8 +110,8 @@ and transform_code data c =
                   let l,g = 
                   begin
                     match data.next with
-                    | Label l -> l, replace_block l (fun (nf,_) -> (nf,Return new_r)) data.graph
-                    | Block (nf,_) -> add_block (nf,Return new_r) data.graph
+                    | Label l -> add_block ([], Return new_r) data.graph
+                    | Block (_,_) -> add_block ([],Return new_r) data.graph
                   end
                 in
                 let data = {data with next = Label l; graph = g} in
@@ -124,37 +124,37 @@ and transform_code data c =
                   let l1, g1 =  (
                                 match data1.next with
                                 | Label l-> l, data1.graph
-                                | Block b-> add_block b data.graph
+                                | Block b-> add_block b data1.graph
                   )in
                   let data2 = transform_code {data with graph = g1} loc3 in
                   let l2, g2 =  (
                                 match data2.next with
                                 | Label l-> l, data2.graph
-                                | Block b-> add_block b data1.graph          
+                                | Block b-> add_block b data2.graph          
                   )in
                   transform_expr new_r1 {data with next = Block ([],JmpC(new_r1, l1, l2)); graph = g2} loc1
 
   | CWHILE (loc_expr,(_,code1)) ->
                 let new_r = new_reg () in
                 let data_bis = data in
-                let l,_ = match data.next with
+                let l1, g = match data.next with
                           | Label l -> l,data.graph
                           | Block b -> add_block b data.graph
                 in 
-                let data = {data with next = Block ([],(Jmp(l)))} in 
-                let label,g = loop (fun l ->  let data = {data with next = Block ([],(Jmp(l)))} in
+                let data = {data with next = Block ([],(Jmp(l1))); graph = g} in 
+                let label,g = loop (fun l ->  let data = transform_expr new_r {data with next = Block ([],JmpC (new_r,l1,l))} loc_expr in
                                               let data = transform_code data code1 in 
                                               (match data.next with
                                                         | Label l -> l, data.graph
                                                         | Block b -> add_block b data.graph)) in
                                               
 
-                transform_expr new_r {data_bis with next = Block ([],JmpC (new_r,label,l)); graph = g} loc_expr
+                transform_expr new_r {data_bis with next = Block ([],JmpC (new_r,label,l1)); graph = g} loc_expr
 
 (* transforme les expressions *)
 and transform_expr r data e =
 
-  let change_data new_nf =
+  let change_data data new_nf =
       match data.next with
       | Label l-> {data with graph = replace_block l (fun (nf,f) -> (new_nf::nf,f)) data.graph}
       | Block (nf,f)-> {data with next = Block (new_nf::nf,f)}
@@ -162,16 +162,16 @@ and transform_expr r data e =
 
   let (l,ex) = e in
   match ex with
-  | VAR v ->  change_data (Load (r, check_location v data))
+  | VAR v ->  change_data data (Load (r, check_location v data))
 
-  | CST v ->  change_data (Cst (r,v))
+  | CST v ->  change_data data (Cst (r,v))
 
-  | STRING s -> change_data (Cst_string (r,s))
+  | STRING s -> change_data data (Cst_string (r,s))
 
-  | SET_VAR (s,loc) ->  let data =  change_data (Store (check_location s data, r)) in
+  | SET_VAR (s,loc) ->  let data =  change_data data (Store (check_location s data, r)) in
                         transform_expr r data loc
 
-  | SET_VAL (s,loc) -> let data = change_data (StoreI (check_location s data, r))in
+  | SET_VAL (s,loc) -> let data = change_data data (StoreI (check_location s data, r))in
                         transform_expr (new_reg ()) data loc
 
   | CALL (s,loc) -> let new_nf = match VarMap.find_opt s data.local_map with (*check si local*)
@@ -181,8 +181,19 @@ and transform_expr r data e =
                                           end
                                 | Some i -> CallR (r)
                     in
-                    let data = change_data new_nf in
-                    List.hd (List.map (transform_expr (new_reg ()) data) loc)
+                    let r = new_reg () in
+                    let add_reg e data =
+                      change_data data (Pop r)
+                    in
+                    let data = List.fold_right add_reg loc data in
+                    
+                    let data = change_data data new_nf in
+                    let add_reg e data =
+                      let data = change_data data (Push r) in
+                      transform_expr r data e
+                    in
+                    let data = List.fold_right add_reg loc data in
+                    data
 
   | OP1 (op,loc) -> let new_r = new_reg () in
                     let new_nf = match op with (* il faut mettre le registre que l'on vient de créer *)
@@ -194,7 +205,7 @@ and transform_expr r data e =
                                 | M_DEREF -> Monop (r,DEREF,new_r)
                                 | M_ADDR -> Monop (r,MOV,new_r)
                     in
-                    let data = change_data new_nf in
+                    let data = change_data data new_nf in
                     transform_expr (new_r) data loc
 
   | OP2 (op, loc1, loc2) -> let new_r1 = new_reg () in 
@@ -206,7 +217,7 @@ and transform_expr r data e =
                                         | S_ADD -> Binop (r, ADD, new_r1, new_r2)
                                         | S_SUB -> Binop (r, SUB, new_r1, new_r2)
                             in
-                            let data = change_data new_nf in
+                            let data = change_data data new_nf in
                             let data = transform_expr (new_r2) data loc2 in
                             transform_expr (new_r1) data loc1
 
@@ -217,7 +228,7 @@ and transform_expr r data e =
                                           | C_LE -> Binop (r, CMP_LE, new_r1, new_r2)
                                           | C_EQ -> Binop (r, CMP_EQ, new_r1, new_r2)
                               in
-                              let data = change_data new_nf in
+                              let data = change_data data new_nf in
                               let data = transform_expr (new_r1) data loc1 in
                               transform_expr (new_r2) data loc2
 

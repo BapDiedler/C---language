@@ -1,8 +1,11 @@
-int c()
+int c(int a, int b)
 {
-  while(0)
-  {
-    return;
-  }
   return 2;
+}
+
+int main()
+{
+  int g;
+  g = c(0,1);
+  return 0;
 }
