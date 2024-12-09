@@ -3,7 +3,7 @@ int c(int a, int b)
   return 2;
 }
 
-int main()
+int d()
 {
   int g;
   g = c(0,1);

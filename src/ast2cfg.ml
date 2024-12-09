@@ -39,6 +39,11 @@ let creat_if data =
   in 
   {data with next = Block ([],(Jmp(l))); graph = g}
   
+let check_name_main dec_list =
+  let names = List.map (fun a -> match a with CDECL (_, name, _) -> name | CFUN (_, name, _, _, _) -> name) dec_list in
+  match List.find_opt (fun a -> a = "main") names with
+  | None -> failwith "no main"
+  | _ -> ()
 
 (* cette fonction passe de l'ast vers cfg pour les globales declarations *)
 let rec transform_global_decl { globals; functions } = function
@@ -186,7 +191,7 @@ and transform_expr r data e =
                       change_data data (Pop r)
                     in
                     let data = List.fold_right add_reg loc data in
-                    
+
                     let data = change_data data new_nf in
                     let add_reg e data =
                       let data = change_data data (Push r) in
@@ -250,5 +255,6 @@ and transform_expr r data e =
   | ESEQ ll -> List.fold_right (fun c data -> let new_r = new_reg () in transform_expr new_r data c) ll data
 
 (* transforme le programme *)
-let transform_program =
-  List.fold_left transform_global_decl { globals = []; functions = [] }
+let transform_program dec_list =
+  check_name_main dec_list;
+  List.fold_left transform_global_decl { globals = []; functions = [] } dec_list
