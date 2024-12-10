@@ -1,11 +1,7 @@
-int c(int a, int b)
+int main()
 {
-  return 2;
-}
-
-int d()
-{
-  int g;
-  g = c(0,1);
-  return 0;
+  int n;
+  int v;
+  n = 10;
+  return n;
 }
