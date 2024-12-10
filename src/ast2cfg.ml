@@ -39,8 +39,8 @@ let new_reg =
               ) arr;
               let c = match !found with None -> failwith "no register" | Some c -> c in
               reg_of_string ("R_"^(string_of_int c))
-
-    | Some r -> let i = int_of_char(String.get r (String.length r - 1)) in
+    | Some ({reg_name = "-1"}) -> Array.fill arr 0 (Array.length arr) true; reg_of_string ("R_0")
+    | Some ({reg_name = r}) -> let i = int_of_char(String.get r (String.length r - 1)) in
                 arr.(i) <- true;
                 reg_of_string ("R_"^(string_of_int i))
     
@@ -85,7 +85,7 @@ and transform_fun_decl globals name args code =
         | _ -> assert false)
       (0, VarMap.empty) args
   in
-  let ret_reg = reg_of_string "dummy" in
+  let ret_reg = new_reg (Some (reg_of_string "-1")) in
   let block = ([], Return ret_reg) in
   let label, graph = add_block block empty_graph in
   let next = Label label in
@@ -121,7 +121,8 @@ and transform_code data c =
                       il faudra également dépiler celles ci*)
                     { data with local_map = outer_locals }
 
-  | CEXPR loc -> transform_expr (new_reg None) data loc
+  | CEXPR loc -> let d,b = transform_expr (new_reg None) data loc in
+                 d (* que faire de b *)
                   
   | CRETURN None -> let r = new_reg None in
                   let l,g = 
@@ -143,7 +144,8 @@ and transform_code data c =
                   end
                 in
                 let data = {data with next = Label l; graph = g} in
-                transform_expr new_r data loc
+                let d,b = transform_expr new_r data loc in
+                 d (* que faire de b *)
                   
   | CIF (loc1,(_,loc2),(_,loc3)) -> 
                   let new_r1 = new_reg None in
@@ -160,7 +162,8 @@ and transform_code data c =
                                 | Label l-> l, data2.graph
                                 | Block b-> add_block b data2.graph          
                   )in
-                  transform_expr new_r1 {data with next = Block ([],JmpC(new_r1, l1, l2)); graph = g2} loc1
+                  let d,b = transform_expr new_r1 {data with next = Block ([],JmpC(new_r1, l1, l2)); graph = g2} loc1 in
+                  d
 
   | CWHILE (loc_expr,(_,code1)) ->
                 let new_r = new_reg None in
@@ -170,14 +173,15 @@ and transform_code data c =
                           | Block b -> add_block b data.graph
                 in 
                 let data = {data with next = Block ([],(Jmp(l1))); graph = g} in 
-                let label,g = loop (fun l ->  let data = transform_expr new_r {data with next = Block ([],JmpC (new_r,l1,l))} loc_expr in
+                let label,g = loop (fun l ->  let data,b1 = transform_expr new_r {data with next = Block ([],JmpC (new_r,l,l1))} loc_expr in
                                               let data = transform_code data code1 in 
                                               (match data.next with
                                                         | Label l -> l, data.graph
                                                         | Block b -> add_block b data.graph)) in
                                               
 
-                transform_expr new_r {data_bis with next = Block ([],JmpC (new_r,label,l1)); graph = g} loc_expr
+                let d,b2 = transform_expr new_r {data_bis with next = Block ([],JmpC (new_r,label,l1)); graph = g} loc_expr in
+                d
 
 (* transforme les expressions *)
 and transform_expr r data e =
@@ -190,11 +194,11 @@ and transform_expr r data e =
 
   let (l,ex) = e in
   match ex with
-  | VAR v ->  change_data data (Load (r, check_location v data))
+  | VAR v ->  change_data data (Load (r, check_location v data)),(false,Nop)
 
-  | CST v ->  change_data data (Cst (r,v))
+  | CST v ->  change_data data (Cst (r,v)),(true,Cst (r,v))
 
-  | STRING s -> change_data data (Cst_string (r,s))
+  | STRING s -> change_data data (Cst_string (r,s)),(true,Cst_string (r,s))
 
   | SET_VAR (s,loc) ->  let data =  change_data data (Store (check_location s data, r)) in
                         transform_expr r data loc
@@ -214,76 +218,92 @@ and transform_expr r data e =
                       change_data data (Pop new_r)
                     in
                     let data = List.fold_right add_reg loc data in
+                    let data = change_data data (Pop r) in
                     let data = change_data data new_nf in
                     let add_reg e data =
                       let data = change_data data (Push new_r) in
                       transform_expr new_r data e
                     in
-                    List.fold_right add_reg loc data
+                    List.fold_right (fun a (d,(b,v1)) ->  let data,(bbis,v2) = add_reg a d in 
+                                                          if bbis then 
+                                                            data,(bbis,v2) 
+                                                          else 
+                                                            data,(b,v1)) loc (data,(false,Nop))
 
   | OP1 (op,loc) -> let new_r = new_reg None in
-                    let new_nf = match op with (* il faut mettre le registre que l'on vient de créer *)
-                                | M_MINUS -> Monop (r,MINUS,new_r)
-                                | M_NOT -> Monop (r,NOT,new_r)
-                                | M_POST_INC -> Monop (r,ADDI 1,new_r)
-                                | M_PRE_INC -> Monop (r,ADDI 1,new_r)
-                                | M_POST_DEC | M_PRE_DEC -> Monop (r,ADDI (-1),new_r)
-                                | M_DEREF -> Monop (r,DEREF,new_r)
-                                | M_ADDR -> Monop (r,MOV,new_r)
+                    let aux new_nf =
+                      let data = change_data data new_nf in
+                      let data = change_data data (Pop r) in
+                      let data,(b,v) = transform_expr (new_r) data loc in
+                      (change_data data (Push r)), (false,Nop)
                     in
-                    let data = change_data data new_nf in
-                    let data = change_data data (Pop r) in
-                    let data = transform_expr (new_r) data loc in
-                    change_data data (Push r)
+                    (match op with (* il faut mettre le registre que l'on vient de créer *)
+                    | M_MINUS -> aux (Monop (r,MINUS,new_r))(* il faut récupérer un élément de la pile (loc) puis le modifier en fonction de *)
+                    | M_NOT -> aux (Monop (r,NOT,new_r))
+                    | M_POST_INC -> aux (Monop (r,ADDI 1,new_r))
+                    | M_PRE_INC -> aux (Monop (r,ADDI 1,new_r))
+                    | M_POST_DEC | M_PRE_DEC -> aux (Monop (r,ADDI (-1),new_r))
+                    | M_DEREF -> aux (Monop (r,DEREF,new_r))
+                    | M_ADDR -> aux (Monop (r,MOV,new_r))
+                    )
 
   | OP2 (op, loc1, loc2) -> let new_r1 = new_reg None in 
                             let new_r2 = new_reg None in
-                            let new_nf = match op with
-                                        | S_MUL -> Binop (r, MUL, new_r1, new_r2)
-                                        | S_DIV -> Binop (r, DIV, new_r1, new_r2)
-                                        | S_MOD -> Binop (r, MOD, new_r1, new_r2)
-                                        | S_ADD -> Binop (r, ADD, new_r1, new_r2)
-                                        | S_SUB -> Binop (r, SUB, new_r1, new_r2)
+                            let new_nf,op = match op with
+                                        | S_MUL -> Binop (r, MUL, new_r1, new_r2),( * )
+                                        | S_DIV -> Binop (r, DIV, new_r1, new_r2),(/)
+                                        | S_MOD -> Binop (r, MOD, new_r1, new_r2),(mod)
+                                        | S_ADD -> Binop (r, ADD, new_r1, new_r2),(+)
+                                        | S_SUB -> Binop (r, SUB, new_r1, new_r2),(-)
                             in
                             let data = change_data data new_nf in
                             let data = change_data data (Pop r) in
-                            let data = transform_expr (new_r2) data loc2 in
+                            let data,(b1,v1) = transform_expr (new_r2) data loc2 in
                             let data = change_data data (Pop new_r2) in
-                            let data = transform_expr (new_r1) data loc1 in
+                            let data,(b2,v2) = transform_expr (new_r1) data loc1 in
                             let data = change_data data (Push new_r2) in
-                            change_data data (Push r)
+                            (match v1,v2 with
+                            | Cst (_,c1), Cst (_,c2) -> change_data data (Push r),(true,Cst(r,op c1 c2))
+                            | _, _ -> change_data data (Push r),(false,Nop)
+                            )
+
+                            
 
   | CMP (cmp, loc1, loc2) ->  let new_r1 = new_reg None in
                               let new_r2 = new_reg None in
-                              let new_nf = match cmp with
-                                          | C_LT -> Binop (r, CMP_LT, new_r1, new_r2)
-                                          | C_LE -> Binop (r, CMP_LE, new_r1, new_r2)
-                                          | C_EQ -> Binop (r, CMP_EQ, new_r1, new_r2)
+                              let new_nf,op = match cmp with
+                                          | C_LT -> Binop (r, CMP_LT, new_r1, new_r2),(<)
+                                          | C_LE -> Binop (r, CMP_LE, new_r1, new_r2),(>)
+                                          | C_EQ -> Binop (r, CMP_EQ, new_r1, new_r2),(=)
                               in
                               let data = change_data data new_nf in
                               let data = change_data data (Pop r) in
-                              let data = transform_expr (new_r2) data loc2 in
+                              let data,(b1,v1) = transform_expr (new_r2) data loc2 in
                               let data = change_data data (Pop new_r2) in
-                              let data = transform_expr (new_r1) data loc1 in
+                              let data,(b2,v2) = transform_expr (new_r1) data loc1 in
                               let data = change_data data (Push new_r2) in
-                              change_data data (Push r)
+                              (match v1,v2 with
+                              | Cst (_,c1), Cst (_,c2) -> let c = if op c1 c2 then 1 else 0 in change_data data (Push r),(true,Cst(r,c))
+                              | _, _ -> change_data data (Push r),(false,Nop)
+                              )
 
   | EIF (loc1, loc2, loc3) -> let data = creat_if data in
 
-                            let data1 = transform_expr r data loc2 in
+                            let data1,b1 = transform_expr r data loc2 in
                             let l1, g1 = match data1.next with
                                         | Label l-> l, data1.graph
                                         | Block b-> add_block b data1.graph
                             in
 
-                            let data2 = transform_expr r {data with graph = g1} loc3 in
+                            let data2,b2 = transform_expr r {data with graph = g1} loc3 in
                             let l2, g2 = match data2.next with
                                         | Label l-> l, data2.graph
                                         | Block b-> add_block b data2.graph
                             in
-                            transform_expr (r) {data with next = Block ([],JmpC(r, l1, l2)); graph = g2} loc1
+                            (* que faire de b1 et b2 ? *)
+                            (transform_expr (r) {data with next = Block ([],JmpC(r, l1, l2)); graph = g2} loc1)
 
-  | ESEQ ll -> List.fold_right (fun c data -> let new_r = new_reg None in transform_expr new_r data c) ll data
+  | ESEQ ll -> List.fold_right (fun c (data,b) -> let new_r = new_reg None in transform_expr new_r data c) ll (data,(false,Nop))
 
 (* transforme le programme *)
 let transform_program dec_list =
