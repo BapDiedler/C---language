@@ -1,17 +1,7 @@
-int main(int a)
+int main()
 {
-  int n;
-  int v;
-  n = 10;
-  v = 0?3:main(v);
-  return v++;
-}
-
-int fact(int n)
-{
-  while(0)
-  {
-    9;
-  }
-  return;
+  int a;
+  int b;
+  a = 0, b=1;
+  return a;
 }
