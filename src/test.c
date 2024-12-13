@@ -7,15 +7,7 @@ int coucou(int a)
 int main()
 {
   int a;
-  while(0)
-  {
-    int c;
-    a = coucou(a);
-    if(1)
-    {
-      int b;
-      return b;
-    }
-  }
+  int b;
+  a = 0, b = 0, a = b ? 3 : 4;
   return a++;
 }

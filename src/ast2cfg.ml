@@ -21,6 +21,12 @@ let new_reg =
     let c = !cpt in
    reg_of_string ("R_"^(string_of_int c))
 
+(* fonction qui crée un nouveau block pour les if *)
+let fusion_block data =
+  match data.next with
+  | Label l-> l, data.graph
+  | Block b-> add_block b data.graph
+
 (* fonction nous donnant la localisation en mémoire de s dans data *)
 let check_location s data =
     match VarMap.find_opt s data.local_map with (*check si local*)
@@ -31,6 +37,7 @@ let check_location s data =
              end
    | Some i -> Local i
 
+(* fonction qui permet d'initailiser pour des if *)
 let creat_if data =
   let l,g = match data.next with
             | Label l -> l,data.graph
@@ -38,6 +45,7 @@ let creat_if data =
   in 
   {data with next = Block ([],(Jmp(l))); graph = g}
   
+(* fonction qui vérifie l'existance d'une fonction main *)
 let check_name_main dec_list =
   let names = List.map (fun a -> match a with CDECL (_, name, _) -> name | CFUN (_, name, _, _, _) -> name) dec_list in
   match List.find_opt (fun a -> a = "main") names with
@@ -93,14 +101,16 @@ and transform_code data c =
                     let data,_ =
                       List.fold_left convert_local_decl ({ data with local_map},0)  var_decls
                     in
-                    let data  = match data.next with (* gestion de la pile pour les variables locales *)
+                    (* gestion de la pile pour les variables locales *)
+                    let data  = match data.next with
                                 | Label l-> {data with next = Block ([ShiftStack (-List.length var_decls)],Jmp l)}
                                 | Block (nf,f)-> {data with next = Block (ShiftStack (-List.length var_decls)::nf,f)}
                     in
                     let data =
                       List.fold_right (fun c data -> transform_code data c) code data
                     in
-                    let data  = match data.next with (* gestion de la pile pour les variables locales *)
+                    (* gestion de la pile pour les variables locales *)
+                    let data  = match data.next with
                                 | Label l-> {data with next = Block ([ShiftStack (List.length var_decls)],Jmp l)}
                                 | Block (nf,f)-> {data with next = Block (ShiftStack (List.length var_decls)::nf,f)}
                     in
@@ -112,14 +122,7 @@ and transform_code data c =
     
   (* Transformation du code d'un return; *)
   | CRETURN None -> let r = new_reg () in
-                  let l,g = 
-                  begin
-                    match data.next with
-                    | Label l -> add_block ([ShiftStack (-VarMap.cardinal data.local_map);Cst (r,0)], Return r) data.graph
-                    | Block _ -> add_block ([ShiftStack (-VarMap.cardinal data.local_map);Cst (r,0)],Return r) data.graph
-                  end
-                in
-                {data with next = Label l; graph = g}
+                    {data with next = Block([ShiftStack (-VarMap.cardinal data.local_map);Cst (r,0)], Return r)}
             
   (* Transformation du code d'un return v; *)
   | CRETURN Some loc -> 
@@ -132,19 +135,12 @@ and transform_code data c =
                   let new_r1 = new_reg () in
                   let data = creat_if data in
                   let data1 = transform_code data loc2 in
-                  let l1, g1 =  (
-                                match data1.next with
-                                | Label l-> l, data1.graph
-                                | Block b-> add_block b data1.graph
-                  )in
+                  (* récupère le premier block *)
+                  let l1, g1 =  fusion_block data1 in
                   let data2 = transform_code {data with graph = g1} loc3 in
-                  let l2, g2 =  (
-                                match data2.next with
-                                | Label l-> l, data2.graph
-                                | Block b-> add_block b data2.graph          
-                  )in
-                  let d = transform_expr new_r1 {data with next = Block ([],JmpC(new_r1, l1, l2)); graph = g2} loc1 in
-                  d
+                  (* récupère le deuxième block *)
+                  let l2, g2 =  fusion_block data2 in
+                  transform_expr new_r1 {data with next = Block ([],JmpC(new_r1, l1, l2)); graph = g2} loc1
 
   (* Transformation du code d'un while *)
   | CWHILE (loc_expr,(_,code1)) ->
@@ -201,14 +197,12 @@ and transform_expr r data e =
                                 | Some i -> CallR (r)
                     in
                     let new_r = new_reg () in
-                    let data = change_data data (ShiftStack (-List.length loc)) in
-                    let data = change_data data (Pop r) in (* récupère la valeur de retour *)
-                    let data = change_data data new_nf in
-                    let add_reg e data =
-                      let data = change_data data (Push new_r) in
-                      transform_expr new_r data e
-                    in
-                    List.fold_right add_reg loc data
+                    let data = change_data data (ShiftStack (-List.length loc)) in (* dépile des paramètres *)
+                    let data = change_data data (Pop r) in (* récupère la valeur de retour qui est au sommet de la pile*)
+                    let data = change_data data new_nf in (* ajout de l'appel de fonction *)
+                    List.fold_right (fun e data ->  let data = change_data data (Push new_r) in
+                                                    transform_expr new_r data e
+                                    ) loc data (* empile les paramètres *)
 
   (* opération unaire sur loc *)
   | OP1 (op,loc) -> let get_name l = (* récupère le nom de la variable *)
@@ -229,6 +223,7 @@ and transform_expr r data e =
                       let (_,e) = l in
                       match e with
                       | VAR s -> [Load (r,check_location s data)]
+                      (* pour les pointeurs il faut load et deref la variable *)
                       | OP1(M_DEREF,(_,VAR s)) -> let new_r = new_reg () in [Load (new_r,check_location s data); Monop(r,DEREF,new_r)]
                       | _ -> failwith "error in OP1"
                     in
@@ -254,7 +249,7 @@ and transform_expr r data e =
                                     let new_nf = get_load loc data in
                                     (
                                       match data.next with
-                                      | Label l-> {data with graph = replace_block l (fun (nf,f) -> (new_nf@nf,f)) data.graph}
+                                      | Label l-> {data with next = Block (new_nf,Jmp l)}
                                       | Block (nf,f)-> {data with next = Block (new_nf@nf,f)}
                                     )
                     (* x-- *)
@@ -264,7 +259,7 @@ and transform_expr r data e =
                                     let new_nf = get_load loc data in
                                     (
                                       match data.next with
-                                      | Label l-> {data with graph = replace_block l (fun (nf,f) -> (new_nf@nf,f)) data.graph}
+                                      | Label l-> {data with next = Block (new_nf,Jmp l)}
                                       | Block (nf,f)-> {data with next = Block (new_nf@nf,f)}
                                     )
                     (* --x *)
@@ -280,12 +275,12 @@ and transform_expr r data e =
   (* opération binaire sur loc1 et loc2 *)
   | OP2 (op, loc1, loc2) -> let new_r1 = new_reg () in 
                             let new_r2 = new_reg () in
-                            let new_nf,op = match op with
-                                        | S_MUL -> Binop (r, MUL, new_r1, new_r2),( * )
-                                        | S_DIV -> Binop (r, DIV, new_r1, new_r2),(/)
-                                        | S_MOD -> Binop (r, MOD, new_r1, new_r2),(mod)
-                                        | S_ADD -> Binop (r, ADD, new_r1, new_r2),(+)
-                                        | S_SUB -> Binop (r, SUB, new_r1, new_r2),(-)
+                            let new_nf = match op with (* récuparation de l'opération *)
+                                        | S_MUL -> Binop (r, MUL, new_r1, new_r2)
+                                        | S_DIV -> Binop (r, DIV, new_r1, new_r2)
+                                        | S_MOD -> Binop (r, MOD, new_r1, new_r2)
+                                        | S_ADD -> Binop (r, ADD, new_r1, new_r2)
+                                        | S_SUB -> Binop (r, SUB, new_r1, new_r2)
                             in
                             let data = change_data data new_nf in
                             let data = change_data data (Pop r) in
@@ -295,14 +290,13 @@ and transform_expr r data e =
                             let data = change_data data (Push new_r2) in
                             change_data data (Push r)
 
-                            
   (* opération de comparaison entre loc1 et loc2 *)                          
   | CMP (cmp, loc1, loc2) ->  let new_r1 = new_reg () in
                               let new_r2 = new_reg () in
-                              let new_nf,op = match cmp with
-                                          | C_LT -> Binop (r, CMP_LT, new_r1, new_r2),(<)
-                                          | C_LE -> Binop (r, CMP_LE, new_r1, new_r2),(>)
-                                          | C_EQ -> Binop (r, CMP_EQ, new_r1, new_r2),(=)
+                              let new_nf = match cmp with
+                                          | C_LT -> Binop (r, CMP_LT, new_r1, new_r2)
+                                          | C_LE -> Binop (r, CMP_LE, new_r1, new_r2)
+                                          | C_EQ -> Binop (r, CMP_EQ, new_r1, new_r2)
                               in
                               let data = change_data data new_nf in
                               let data = change_data data (Pop r) in
@@ -311,20 +305,16 @@ and transform_expr r data e =
                               let data = transform_expr (new_r1) data loc1 in
                               let data = change_data data (Push new_r2) in
                               change_data data (Push r)
+
   (* opération conditionnelle sur des expressions *)
   | EIF (loc1, loc2, loc3) -> let data = creat_if data in
                             let data1 = transform_expr r data loc2 in
-                            let l1, g1 = match data1.next with
-                                        | Label l-> l, data1.graph
-                                        | Block b-> add_block b data1.graph
-                            in
+                            let l1, g1 = fusion_block data1 in
                             let data2 = transform_expr r {data with graph = g1} loc3 in
-                            let l2, g2 = match data2.next with
-                                        | Label l-> l, data2.graph
-                                        | Block b-> add_block b data2.graph
-                            in
+                            let l2, g2 = fusion_block data2 in
                             (transform_expr (r) {data with next = Block ([],JmpC(r, l1, l2)); graph = g2} loc1)
 
+  (* exécution en séquence d'expressions *)
   | ESEQ ll -> List.fold_right (fun c (data) -> let new_r = new_reg () in transform_expr new_r data c) ll data
 
 (* transforme le programme *)
