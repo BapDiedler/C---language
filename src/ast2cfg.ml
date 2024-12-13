@@ -27,7 +27,11 @@ let new_reg =
 
 let info_var =
   let hash = Hashtbl.create 10 in
-  fun ((lb: next_instr), (pos: int)) -> failwith "ccc"
+  fun s v ->
+    match v with
+    | None -> Hashtbl.find_opt hash s
+    | Some i -> Hashtbl.add hash s i; Some i
+    
 
 
 (* let new_reg =
@@ -74,9 +78,49 @@ let check_name_main dec_list =
 
 let rec check_const (data: data) : data =
   match data.next with
-  | Label l -> failwith "error check constant"
-  | Block (nf,f) -> failwith "error check constant"
+  | Label l -> let b = get_block l data.graph in check_block b data
+  | Block b -> check_block b data
 
+and check_block b data =
+  let (nf,f) = b in
+  match nf,f with
+  | [], f -> check_final_instr f data
+  | nf::nf_ll, f -> let data = check_non_final_instr nf data in
+                    check_block (nf_ll,f) data
+
+and check_non_final_instr nf data =
+
+  let change_data data new_nf =
+    match data.next with
+    | Label l-> {data with graph = replace_block l (fun (nf,f) -> (new_nf::nf,f)) data.graph}
+    | Block (nf,f)-> {data with next = Block (new_nf::nf,f)}
+  in
+
+  match nf with
+  | Nop -> change_data data Nop
+  | Cst (r,i) -> let _ = info_var r (Some i) in change_data data (Cst (r,i))
+  | Cst_string (r,s) -> change_data data (Cst_string (r,s))
+  | Store (l,r) -> change_data data (Store (l,r))
+  | StoreI (l,r) -> change_data data (StoreI (l,r))
+  | Load (r,l) -> change_data data (Load (r,l))
+  | Addr (r,l) -> change_data data (Addr (r,l))
+  | Push r -> change_data data (Push r)
+  | Pop r -> change_data data (Pop r)
+  | ShiftStack i -> change_data data (ShiftStack i)
+  | Monop (r1,op,r2) -> change_data data (Monop (r1,op,r2))
+  | Binop (r1,op,r2,r3) -> change_data data (Binop (r1,op,r2,r3))
+  | Call s -> change_data data (Call s)
+  | CallR r -> change_data data (CallR r)
+
+and check_final_instr f data =
+  match f with
+  | Jmp l -> {data with next = Block ([],Jmp l)}
+  | Return r -> {data with next = Block ([],Return r)}
+  | JmpC (r,l1,l2) -> (match info_var r None with
+                      | None -> data
+                      | Some 0 -> {data with next = Block ([],Jmp l1)}
+                      | Some i -> {data with next = Block ([],Jmp l2)}
+                      )
 
 (* cette fonction passe de l'ast vers cfg pour les globales declarations *)
 let rec transform_global_decl { globals; functions } = function
@@ -249,7 +293,21 @@ and transform_expr r data e =
                     in
                     List.fold_right add_reg loc data
 
-  | OP1 (op,loc) -> let new_r = new_reg 1 in
+  | OP1 (op,loc) -> let get_name l =
+                      let (_,e) = l in
+                      match e with
+                      | VAR s -> s
+                      | OP1(M_DEREF,(_,VAR s)) -> s
+                      | _ -> failwith "coucou"
+                    in
+                    let get_store l data =
+                      let (_,e) = l in
+                      match e with
+                      | VAR s -> Store (check_location s data,r)
+                      | OP1(M_DEREF,(_,VAR s)) -> StoreI (check_location s data,r)
+                      | _ -> failwith "coucou"
+                    in
+                    let new_r = new_reg 1 in
                     let aux new_nf =
                       let data = change_data data new_nf in
                       let data = change_data data (Pop r) in
@@ -259,9 +317,38 @@ and transform_expr r data e =
                     (match op with (* il faut mettre le registre que l'on vient de créer *)
                     | M_MINUS -> aux (Monop (r,MINUS,new_r))(* il faut récupérer un élément de la pile (loc) puis le modifier en fonction de *)
                     | M_NOT -> aux (Monop (r,NOT,new_r))
-                    | M_POST_INC -> aux (Monop (r,ADDI 1,new_r))
-                    | M_PRE_INC -> aux (Monop (r,ADDI 1,new_r))
-                    | M_POST_DEC | M_PRE_DEC -> aux (Monop (r,ADDI (-1),new_r))
+                    | M_POST_INC -> let new_nf = Monop (r,ADDI (-1),r) in
+                                    let data = change_data data new_nf in
+                                    let new_nf = get_store loc data in
+                                    let data = change_data data new_nf in
+                                    let new_nf = Monop (r,ADDI 1, r) in
+                                    let data = change_data data new_nf in
+                                    let new_nf = Load (r,check_location (get_name loc) data) in
+                                    let data = change_data data new_nf in
+                                    data
+                    | M_PRE_INC ->  let new_nf = get_store loc data in
+                                    let data = change_data data new_nf in
+                                    let new_nf = Monop (r,ADDI 1, r) in
+                                    let data = change_data data new_nf in
+                                    let new_nf = Load (r,check_location (get_name loc) data) in
+                                    let data = change_data data new_nf in
+                                    data
+                    | M_POST_DEC -> let new_nf = Monop (r,ADDI 1,r) in
+                                    let data = change_data data new_nf in
+                                    let new_nf = get_store loc data in
+                                    let data = change_data data new_nf in
+                                    let new_nf = Monop (r,ADDI (-1), r) in
+                                    let data = change_data data new_nf in
+                                    let new_nf = Load (r,check_location (get_name loc) data) in
+                                    let data = change_data data new_nf in
+                                    data
+                    | M_PRE_DEC ->  let new_nf = get_store loc data in
+                                    let data = change_data data new_nf in
+                                    let new_nf = Monop (r,ADDI (-1), r) in
+                                    let data = change_data data new_nf in
+                                    let new_nf = Load (r,check_location (get_name loc) data) in
+                                    let data = change_data data new_nf in
+                                    data
                     | M_DEREF -> aux (Monop (r,DEREF,new_r))
                     | M_ADDR -> aux (Monop (r,MOV,new_r))
                     )
