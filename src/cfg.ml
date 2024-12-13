@@ -179,7 +179,7 @@ end
 let dump_dot filename { functions; _ } =
   let oc = open_out filename in
   let fmt = Format.formatter_of_out_channel oc in
-  Format.fprintf fmt "@[<hv 4>digraph G {@;%a@;@]}@]"
+  Format.fprintf fmt "@[<hv 4>strict digraph G {@;%a@;@]}@]"
     (Format.pp_print_list
        ~pp_sep:(fun p () -> Format.fprintf p "@;")
        PrettyPrinter.pp_func_cfg)

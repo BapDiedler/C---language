@@ -1,8 +1,21 @@
+int coucou(int a)
+{
+  a = 0;
+  return ++a;
+}
+
 int main()
 {
   int a;
-  int b;
-  a = 0;
-  b = ++a;
-  return a;
+  while(0)
+  {
+    int c;
+    a = coucou(a);
+    if(1)
+    {
+      int b;
+      return b;
+    }
+  }
+  return a++;
 }
