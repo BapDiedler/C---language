@@ -13,7 +13,9 @@
  open Clexer
  open Cparser
  open Usage
- open Cfg   
+ open Cfg  
+ open Analysis_CF
+  
 
 let () =
   let c = open_in file in
@@ -44,7 +46,10 @@ let () =
     match !Usage.cfg_file with
     | None -> ()
     | Some filename ->
-        Ast2cfg.transform_program program |> Cfg.dump_dot filename;
+        let p = Ast2cfg.transform_program program in
+        Cfg.dump_dot filename p;
+        let env = Analysis_CF.analysis_const p in
+        Analysis_CF.print_LabelMap env;
 
         exit 2
 

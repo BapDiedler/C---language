@@ -2,6 +2,8 @@ type label
 (** Les types labels sont opaques et sont soit crées par [label_of_func_name],
      ou bien manipulés par 2 fonctions décrites plus tard*)
 
+val print_label : label -> unit
+
 val label_of_func_name : string -> label
 (** label ayant le nom de la function *)
 

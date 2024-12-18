@@ -176,6 +176,8 @@ module PrettyPrinter = struct
       name pp_label entry pp_cfg (entry, graph, s)
 end
 
+let print_label label = Printf.printf "%s" label.label
+
 let dump_dot filename { functions; _ } =
   let oc = open_out filename in
   let fmt = Format.formatter_of_out_channel oc in

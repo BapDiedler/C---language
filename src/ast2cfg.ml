@@ -11,6 +11,7 @@ type data = {
   local_map : int VarMap.t;
   next : next_instr;
   graph : graph;
+  info_constantes : (string -> int) VarMap.t;
 }
 
 (* fonction de création d'un nouveau registre *)
@@ -19,7 +20,7 @@ let new_reg =
   fun v ->
     incr cpt;
     let c = !cpt in
-   reg_of_string ("R_"^(string_of_int c))
+    reg_of_string ("R_"^(string_of_int c))
 
 (* fonction qui crée un nouveau block pour les if *)
 let fusion_block data =
@@ -74,7 +75,8 @@ and transform_fun_decl globals name args code =
   let label, graph = add_block block empty_graph in
   let next = Label label in
   let local_map = VarMap.empty in
-  let data = { globals; arg_map; local_map; next; graph} in
+  let info_constantes = VarMap.empty in
+  let data = { globals; arg_map; local_map; next; graph; info_constantes} in
   let data = transform_code data code in
   (* let data = check_const data in change le graphe de flot de contrôle en remplassant les éléments constants par des constantes *)
   match data.next with
@@ -316,8 +318,8 @@ and transform_expr r data e =
 
   (* exécution en séquence d'expressions *)
   | ESEQ ll -> List.fold_right (fun c (data) -> let new_r = new_reg () in transform_expr new_r data c) ll data
-
 (* transforme le programme *)
 let transform_program dec_list =
   check_name_main dec_list;
-  List.fold_left transform_global_decl { globals = []; functions = [] } dec_list
+  let prog = List.fold_left transform_global_decl { globals = []; functions = [] } dec_list in
+  prog
